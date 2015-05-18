@@ -1,83 +1,154 @@
-// Require necessary libs
-var request = require("request"),
-	cheerio = require("cheerio"),
-    csv     = require("fast-csv"),
-    whois   = require('whois-json'),
-    fs      = require('fs'),
-    url     = require('url');
-
 /*
- *
+ * Gather archive.org and whois data
+ * For the UK Companies and the wev publication
+ * by Francesco Merletti and Marta Musso
  */
 
-// Config
-var config = {
-  inCsv:  'companies.csv',
-  outCsv:  'result.csv'
-};
+// Require necessary libs
+var request = require('request'),
+  cheerio = require('cheerio'),
+  csv     = require('fast-csv'),
+  fs      = require('fs'),
+  moment  = require('moment'),
+  jsSHA   = require('jssha'),
+  url     = require('url');
+
+// Import Config
+var i = 0,
+  config = require('config');
 
 
 // PROCESS
-var i=0;
 console.log('Start processing');
+
 csv
   .fromPath(config.inCsv, {headers: true})
-  .transform(function(biz, next){
-    // Get domain
-    var domain = '';
-    if (biz.originalUrl != '') {
-      domain = getDomain(biz.originalUrl);
+  .transform(function (biz, next) {
+    'use strict';
+
+    // If it's a duplicate skip it
+    if (biz.duplicates === 'dup') {
+      next(null, biz);
+      return;
     }
 
     // Log progress
-    console.log('Processing item ' + i + ' domain: ' + domain);
-    i++;
+    console.log('Processing item ' + i + ' domain: ' + getDomain(biz.originalUrl));
+    i = i + 1;
 
-    // Gather whois data
-    whois(domain, function(err1, whoisData) {
-      if (!err1) {
-        biz.whoisDomain                   = whoisData.domainName;
-        biz.whoisUpdatedDate              = whoisData.updatedDate;
-        biz.whoisCreationDate             = whoisData.creationDate;
-        biz.whoisRegistrar                = whoisData.registrar;
-        biz.whoisRegistrarUrl             = whoisData.registrarUrl;
-        biz.whoisRegistrantName           = whoisData.registrantName;
-        biz.whoisRegistrantOrganization   = whoisData.registrantOrganization;
-        biz.whoisRegistrantStreet         = whoisData.registrantStreet;
-        biz.whoisRegistrantCity           = whoisData.registrantCity;
-        biz.whoisRegistrantStateProvince  = whoisData.registrantStateProvince;
-        biz.whoisRegistrantPostalCode     = whoisData.registrantPostalCode;
-        biz.whoisRegistrantCountry        = whoisData.registrantCountry;
-        biz.whoisRegistrantPhone          = whoisData.registrantPhone;
-        biz.whoisRegistrantFax            = whoisData.registrantFax;
-        biz.whoisRegistrantEmail          = whoisData.registrantEmail;
-        biz.whoisNameServer               = whoisData.nameServer;
-      }
-      // Make archive.org request
-      if (biz.archiveUrl != "") {
-        request(biz.archiveUrl, function (err2, response, body) {
-          if (!err2) {
-            var $ = cheerio.load(body),
-                dates    = $('#wm-ipp-inside > table > tbody > tr > td.c > table > tbody > tr:nth-child(2) > td.s > div').html(),
-                captures = $('#wm-ipp-inside > table > tbody > tr > td.c > table > tbody > tr:nth-child(2) > td.s > a').html();
-            if (dates && captures) {
-              biz.archiveCaptures     = captures.split(' ')[0];
-              biz.archiveFirstCapture = dates.split(' - ')[0];
-              biz.archiveLastCapture  = dates.split(' - ')[1];
-            }
-          }
-          next(null, biz);
-        });
-      } else {
+    getWhoisData(biz, function (biz) {
+      console.log('  Whois: done.');
+      getArchiveData(biz, function (biz) {
+        console.log('  Archive.org: done.');
         next(null, biz);
-      }
+      });
     });
+
   })
   .pipe(csv.createWriteStream({headers: true}))
   .pipe(fs.createWriteStream(config.outCsv, {encoding: "utf8"}));
 
 
 // UTILITIES
-function getDomain (customUrl) {
+function getDomain(customUrl) {
+  'use strict';
   return url.parse(customUrl).hostname;
+}
+
+function getWhoisData(biz, callback) {
+  'use strict';
+  // If we already have whois data or if we don't have an origialUrl or if the domain is actually an IP address then skip this step
+  if (biz.whoisDomain || biz.whoisDomain !== '' || biz.archiveUrl === '' || isIPaddress(getDomain(biz.originalUrl))) {
+    console.log('  Skipping whois data');
+    callback(biz);
+    return;
+  }
+
+  // Otherwise make request to bulk-whois-api.com
+  var domain = getDomain(biz.originalUrl),
+    date = moment.utc().format('YYYY-MM-DD HH:mm:ss'),
+    requestBody = 'query=' + domain,
+    shaObj = new jsSHA(config.bwaKey + date + requestBody, 'TEXT'),
+    options = {
+      url: config.bwaBaseUrl,
+      method: 'POST',
+      body: requestBody,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Key': config.bwaKey,
+        'Time': date,
+        'Sign': shaObj.getHMAC(config.bwaSecret, "TEXT", "SHA-512", "HEX").toLowerCase()
+      }
+    };
+  request(options, function (err, response, body) {
+    if (err) {
+      console.log('  There was an error with the whois request.');
+      callback(biz);
+      return;
+    }
+
+    body = JSON.parse(body);
+
+    if (response.statusCode !== 200 || body.success !== 1) {
+      console.log('  There was an error in the whois response.');
+      callback(biz);
+      return;
+    }
+
+    // Save data to disk
+
+
+    // Add whois data to biz object
+    biz.whoisDomain                   = (body.output.domain ? body.output.domain : '');
+    biz.whoisUpdatedDate              = (body.output.updated_on ? body.output.updated_on : '');
+    biz.whoisCreationDate             = (body.output.created_on ? body.output.created_on : '');
+    biz.whoisExpirationDate           = (body.output.expires_on ? body.output.expires_on : '');
+    biz.whoisRegistrar                = (body.output.registrar && body.output.registrar.name ? body.output.registrar.name : '');
+    biz.whoisRegistrarUrl             = (body.output.registrar && body.output.registrar.url ? body.output.registrar.url : '');
+    biz.whoisRegistrantName           = (body.output.registrant_contact && body.output.registrant_contact.name ? body.output.registrant_contact.name : '');
+    biz.whoisRegistrantOrganization   = (body.output.registrant_contact && body.output.registrant_contact.organization ? body.output.registrant_contact.organization : '');
+    biz.whoisRegistrantStreet         = (body.output.registrant_contact && body.output.registrant_contact.address ? body.output.registrant_contact.address : '');
+    biz.whoisRegistrantCity           = (body.output.registrant_contact && body.output.registrant_contact.city ? body.output.registrant_contact.city : '');
+    biz.whoisRegistrantStateProvince  = (body.output.registrant_contact && body.output.registrant_contact.state ? body.output.registrant_contact.state : '');
+    biz.whoisRegistrantPostalCode     = (body.output.registrant_contact && body.output.registrant_contact.zip ? body.output.registrant_contact.zip : '');
+    biz.whoisRegistrantCountry        = (body.output.registrant_contact && body.output.registrant_contact.country_code ? body.output.registrant_contact.country_code : '');
+    biz.whoisRegistrantPhone          = (body.output.registrant_contact && body.output.registrant_contact.phone ? body.output.registrant_contact.phone : '');
+    biz.whoisRegistrantFax            = (body.output.registrant_contact && body.output.registrant_contact.fax ? body.output.registrant_contact.fax : '');
+    biz.whoisRegistrantEmail          = (body.output.registrant_contact && body.output.registrant_contact.email ? body.output.registrant_contact.email : '');
+    biz.whoisNameServer               = (body.output.nameservers && body.output.nameservers[0] && body.output.nameservers[0].name ? body.output.nameservers[0].name : '');
+
+    callback(biz);
+  });
+}
+
+function getArchiveData(biz, callback) {
+  'use strict';
+  // If we already have archive data or if we don't have an archiveUrl then skip this step
+  if (biz.archiveCaptures || biz.archiveCaptures !== '' || biz.archiveUrl === '') {
+    console.log('  Skipping archive data');
+    callback(biz);
+    return;
+  }
+  // Otherwise make archive.org request
+  request(biz.archiveUrl, function (err2, response, body) {
+    if (!err2) {
+      var $ = cheerio.load(body),
+        dates    = $('#wm-ipp-inside > table > tbody > tr > td.c > table > tbody > tr:nth-child(2) > td.s > div').html(),
+        captures = $('#wm-ipp-inside > table > tbody > tr > td.c > table > tbody > tr:nth-child(2) > td.s > a').html();
+      if (dates && captures) {
+        biz.archiveCaptures     = captures.split(' ')[0];
+        biz.archiveFirstCapture = dates.split(' - ')[0];
+        biz.archiveLastCapture  = dates.split(' - ')[1];
+      }
+    }
+    callback(biz);
+  });
+}
+
+// from http://www.w3resource.com/javascript/form/ip-address-validation.php
+function isIPaddress(ipaddress) {
+  if (/^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/.test(ipaddress)) {
+    return (true)
+  }
+  return (false)
 }
