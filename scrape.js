@@ -11,6 +11,7 @@ var request = require('request'),
   fs      = require('fs'),
   moment  = require('moment'),
   jsSHA   = require('jssha'),
+  dp      = require('domain-parser'),
   url     = require('url');
 
 // Import Config
@@ -52,7 +53,7 @@ csv
 // UTILITIES
 function getDomain(customUrl) {
   'use strict';
-  return url.parse(customUrl).hostname;
+  return dp(url.parse(customUrl).hostname).domainName;
 }
 
 function getWhoisData(biz, callback) {
@@ -90,7 +91,7 @@ function getWhoisData(biz, callback) {
     body = JSON.parse(body);
 
     if (response.statusCode !== 200 || body.success !== 1) {
-      console.log('  There was an error in the whois response.');
+      console.log('  There was an error in the whois response:' + body.message);
       callback(biz);
       return;
     }
