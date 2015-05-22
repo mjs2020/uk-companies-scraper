@@ -16,7 +16,7 @@ var request = require('request'),
 
 // Import Config
 var i = 0,
-  config = require('config');
+  config = require('./config');
 
 
 // PROCESS
@@ -38,9 +38,7 @@ csv
     i = i + 1;
 
     getWhoisData(biz, function (biz) {
-      console.log('  Whois: done.');
       getArchiveData(biz, function (biz) {
-        console.log('  Archive.org: done.');
         next(null, biz);
       });
     });
@@ -60,7 +58,7 @@ function getWhoisData(biz, callback) {
   'use strict';
   // If we already have whois data or if we don't have an origialUrl or if the domain is actually an IP address then skip this step
   if (biz.whoisDomain || biz.whoisDomain !== '' || biz.archiveUrl === '' || isIPaddress(getDomain(biz.originalUrl))) {
-    console.log('  Skipping whois data');
+    console.log('  Whois: Skipped');
     callback(biz);
     return;
   }
@@ -83,7 +81,7 @@ function getWhoisData(biz, callback) {
     };
   request(options, function (err, response, body) {
     if (err) {
-      console.log('  There was an error with the whois request.');
+      console.log('  Whois: Error - There was an error with the whois request.');
       callback(biz);
       return;
     }
@@ -91,13 +89,10 @@ function getWhoisData(biz, callback) {
     body = JSON.parse(body);
 
     if (response.statusCode !== 200 || body.success !== 1) {
-      console.log('  There was an error in the whois response:' + body.message);
+      console.log('  Whois: Error - There was an error in the whois response:' + body.message);
       callback(biz);
       return;
     }
-
-    // Save data to disk
-
 
     // Add whois data to biz object
     biz.whoisDomain                   = (body.output.domain ? body.output.domain : '');
@@ -118,6 +113,7 @@ function getWhoisData(biz, callback) {
     biz.whoisRegistrantEmail          = (body.output.registrant_contact && body.output.registrant_contact.email ? body.output.registrant_contact.email : '');
     biz.whoisNameServer               = (body.output.nameservers && body.output.nameservers[0] && body.output.nameservers[0].name ? body.output.nameservers[0].name : '');
 
+    console.log('  Whois: Succeeded');
     callback(biz);
   });
 }
@@ -126,7 +122,7 @@ function getArchiveData(biz, callback) {
   'use strict';
   // If we already have archive data or if we don't have an archiveUrl then skip this step
   if (biz.archiveCaptures || biz.archiveCaptures !== '' || biz.archiveUrl === '') {
-    console.log('  Skipping archive data');
+    console.log('  Archive: Skipped');
     callback(biz);
     return;
   }
@@ -142,6 +138,7 @@ function getArchiveData(biz, callback) {
         biz.archiveLastCapture  = dates.split(' - ')[1];
       }
     }
+    console.log('  Archive: Success');
     callback(biz);
   });
 }
