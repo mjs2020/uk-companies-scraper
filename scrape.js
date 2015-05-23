@@ -86,7 +86,14 @@ function getWhoisData(biz, callback) {
       return;
     }
 
-    body = JSON.parse(body);
+    try {
+      body = JSON.parse(body);
+    } catch (err) {
+      console.log('  Whois: Error - Whois response was not JSON:' + err);
+      console.log('  Response:' + body);
+      callback(biz);
+      return;
+    }
 
     if (response.statusCode !== 200 || body.success !== 1) {
       console.log('  Whois: Error - There was an error in the whois response:' + body.message);
@@ -95,7 +102,7 @@ function getWhoisData(biz, callback) {
     }
 
     // Add whois data to biz object
-    biz.whoisDomain                   = (body.output.domain ? body.output.domain : '');
+    biz.whoisDomain                   = (body.output.domain ? body.output.domain : domain);
     biz.whoisUpdatedDate              = (body.output.updated_on ? body.output.updated_on : '');
     biz.whoisCreationDate             = (body.output.created_on ? body.output.created_on : '');
     biz.whoisExpirationDate           = (body.output.expires_on ? body.output.expires_on : '');
